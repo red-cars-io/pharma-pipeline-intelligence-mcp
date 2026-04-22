@@ -975,7 +975,7 @@ const isStandby = Actor.config.get('metaOrigin') === 'STANDBY';
 
 if (isStandby) {
     // Standby mode: start HTTP server for MCP requests
-    const PORT = Actor.config.get('containerPort') || process.env.ACTOR_WEB_SERVER_PORT || 3000;
+    const PORT = Actor.config.get('containerPort') || process.env.ACTOR_WEB_SERVER_PORT || 4321;
 
     const server = http.createServer(async (req, res) => {
         // Handle readiness probe
@@ -1091,8 +1091,10 @@ if (isStandby) {
 const input = await Actor.getInput();
 if (input) {
     const { tool, params = {} } = input;
-    const result = await handleTool(tool, params);
-    await Actor.setValue('OUTPUT', result);
+    if (tool) {
+        const result = await handleTool(tool, params);
+        await Actor.setValue('OUTPUT', result);
+    }
 }
 
 await Actor.exit();
