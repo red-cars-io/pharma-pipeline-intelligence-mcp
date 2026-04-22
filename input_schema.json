@@ -1,62 +1,31 @@
 {
+  "title": "Pharma Pipeline Intelligence MCP",
+  "type": "object",
   "schemaVersion": 1,
   "properties": {
-    "query": {
+    "tool": {
+      "title": "Tool Name",
       "type": "string",
-      "title": "Query",
-      "description": "Drug name, condition, or therapeutic area to search",
-      "editor": "textfield"
+      "description": "MCP tool to call",
+      "enum": [
+        "search_drug_pipeline",
+        "analyze_competitive_landscape",
+        "detect_adverse_event_signals",
+        "track_patent_exclusivity",
+        "compare_regulatory_pathways",
+        "monitor_drug_recalls",
+        "assess_literature_momentum",
+        "generate_pipeline_threat_report"
+      ],
+      "editor": "select",
+      "prefill": "search_drug_pipeline"
     },
-    "status": {
-      "type": "string",
-      "title": "Status",
-      "description": "RECURITING, ACTIVE_NOT_RECRUITING, COMPLETED",
-      "editor": "textfield"
-    },
-    "phase": {
-      "type": "string",
-      "title": "Phase",
-      "description": "PHASE1, PHASE2, PHASE3, PHASE4",
-      "editor": "textfield"
-    },
-    "maxResults": {
-      "type": "integer",
-      "title": "Max Results",
-      "description": "Maximum results (default: 50, max: 50)",
-      "default": 50,
-      "editor": "textfield"
-    },
-    "company": {
-      "type": "string",
-      "title": "Company",
-      "description": "Company name",
-      "editor": "textfield"
-    },
-    "drug": {
-      "type": "string",
-      "title": "Drug",
-      "description": "Drug name",
-      "editor": "textfield"
-    },
-    "indication": {
-      "type": "string",
-      "title": "Indication",
-      "description": "Indication for ClinicalTrials.gov query",
-      "editor": "textfield"
-    },
-    "classification": {
-      "type": "string",
-      "title": "Classification",
-      "description": "Class I, Class II, Class III",
-      "editor": "textfield"
-    },
-    "limit": {
-      "type": "integer",
-      "title": "Limit",
-      "description": "Max records (default: 100, max: 500)",
-      "default": 100,
-      "editor": "textfield"
+    "params": {
+      "title": "Parameters (JSON)",
+      "type": "object",
+      "description": "Tool parameters as JSON object",
+      "editor": "json",
+      "prefill": {"query": "GLP-1 obesity"}
     }
-  },
-  "required": ["query"]
+  }
 }
