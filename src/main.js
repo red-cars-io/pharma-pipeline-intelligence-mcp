@@ -1081,8 +1081,6 @@ if (isStandby) {
     process.on('SIGTERM', () => {
         server.close(() => process.exit(0));
     });
-
-    return; // Keep the server running
 }
 
 // =============================================================================
