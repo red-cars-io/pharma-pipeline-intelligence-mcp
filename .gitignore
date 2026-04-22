@@ -1,0 +1,5 @@
+node_modules/
+.actor/
+.DS_Store
+*.log
+.env

@@ -1,0 +1,179 @@
+# Pharma Pipeline Intelligence MCP Server
+
+## Purpose
+
+Pharma Pipeline Intelligence MCP is an MCP server giving AI agents access to pharmaceutical pipeline data across 6 government databases (ClinicalTrials.gov, FDA Drug Approvals, FDA FAERS, FDA Enforcement, USPTO, PubMed). It produces composite Pipeline Threat Scores (0-100) for competitive intelligence. AI agents performing biotech investment analysis, competitive landscape monitoring, patent cliff assessment, safety signal surveillance, or regulatory pathway planning query real-time clinical trials, FDA approvals, adverse event reports, patent portfolios, and publication trends without requiring API keys.
+
+**Built for:** Biotech investors validating investment theses, business development teams monitoring competitive landscapes, medical affairs tracking safety signals, patent attorneys assessing generic entry risk, regulatory affairs planning market access, and research strategy teams identifying emerging therapeutic areas.
+
+**No API key required** — all data sources are free government APIs.
+
+---
+
+## When to Call This MCP
+
+Use Pharma Pipeline Intelligence MCP when you need to:
+
+- Get composite Pipeline Threat Scores (0-100) for any drug or therapeutic area
+- Track Phase 1/2/3/4 clinical trials by drug, condition, or company
+- Analyze FDA approval status and competitive threats
+- Detect adverse event signals with MedDRA reaction tracking
+- Monitor USPTO patent portfolios with First-Mover Advantage scores
+- Track FDA Class I/II/III drug recalls
+- Measure publication acceleration via PubMed Literature Momentum Scores
+- Generate full composite threat reports fanning out to all 6 sources simultaneously
+
+---
+
+## Tools
+
+### search_drug_pipeline
+
+**Purpose:** Search ClinicalTrials.gov for clinical trials by drug, condition, or therapeutic area
+
+**When to call:** When researching the clinical trial landscape for a therapeutic area to assess competitive intensity.
+
+**Example AI prompt:** "Find all Phase 3 trials for GLP-1 agonists that are currently recruiting, show sponsors, enrollment, and estimated completion dates."
+
+**Parameters:** query (required), status, phase, maxResults
+
+**Price:** $0.05
+
+---
+
+### analyze_competitive_landscape
+
+**Purpose:** FDA competitive analysis with Pipeline Threat Score
+
+**When to call:** When assessing the competitive landscape for a drug class to identify threats and opportunities.
+
+**Example AI prompt:** "Analyze the competitive landscape for CDK4/6 inhibitors in breast cancer — show FDA approvals, active trial count, and pipeline threat score."
+
+**Parameters:** query (required)
+
+**Price:** $0.08
+
+---
+
+### detect_adverse_event_signals
+
+**Purpose:** Analyze FDA FAERS reports for adverse event signals with Divergence Score
+
+**When to call:** When monitoring adverse event reports for emerging safety signals.
+
+**Example AI prompt:** "Screen FDA FAERS for adverse event signals on semaglutide — show serious events, deaths, hospitalizations, and top MedDRA reactions. Limit to 500 most recent reports."
+
+**Parameters:** query (required), limit
+
+**Price:** $0.06
+
+---
+
+### track_patent_exclusivity
+
+**Purpose:** USPTO patent portfolio analysis with First-Mover Advantage Score
+
+**When to call:** When assessing patent cliff risk and exclusivity remaining for a drug.
+
+**Example AI prompt:** "Track patent exclusivity for pembrolizumab — show patent count, filing dates, expiry dates, years of exclusivity remaining, and First-Mover Advantage score."
+
+**Parameters:** query (required)
+
+**Price:** $0.05
+
+---
+
+### compare_regulatory_pathways
+
+**Purpose:** FDA approval status and regulatory gap analysis (EMA data unavailable)
+
+**When to call:** When checking FDA approval status for market entry planning.
+
+**Example AI prompt:** "Compare regulatory status for GLP-1 drugs — show FDA approvals and note EMA unavailability."
+
+**Parameters:** query (required)
+
+**Price:** $0.05
+
+---
+
+### monitor_drug_recalls
+
+**Purpose:** Search FDA drug recall database by drug, manufacturer, or classification
+
+**When to call:** When checking for active recalls on a drug class before dispensing.
+
+**Example AI prompt:** "Find all FDA Class I and II recalls for metformin in the last 3 years — show classification, reason, and recalling firm."
+
+**Parameters:** query (required), classification
+
+**Price:** $0.04
+
+---
+
+### assess_literature_momentum
+
+**Purpose:** PubMed publication trend analysis with Literature Momentum Score
+
+**When to call:** When assessing publication trends and emerging research momentum for a drug.
+
+**Example AI prompt:** "Assess literature momentum for GLP-1 obesity therapeutics — show yearly publication counts, acceleration ratio, top journals, and Literature Momentum Score."
+
+**Parameters:** query (required), maxResults
+
+**Price:** $0.05
+
+---
+
+### generate_pipeline_threat_report
+
+**Purpose:** Full composite report: 4 sub-model scores + composite Pipeline Threat Score (0-100)
+
+**When to call:** When generating comprehensive competitive threat analysis for a drug franchise. Fans out to all 6 data sources simultaneously.
+
+**Example AI prompt:** "Generate a full pipeline threat report for Novo Nordisk's semaglutide in obesity — include all 4 sub-model scores and composite threat score."
+
+**Parameters:** company (required), drug (required), indication
+
+**Price:** $0.15
+
+---
+
+## Scoring Sub-Models
+
+**Pipeline Threat Score (0-100):** Measures competitive pressure. Components: Phase 3 competitors (8 pts each, cap 40), trial volume (2 pts each, cap 20), FDA approvals (5 pts each, cap 15), competitor recalls (-5 pts each, cap -15).
+
+**First-Mover Advantage Index (0-100):** Assesses defensive position. Components: patent breadth (6 pts/patent, cap 30), exclusivity duration (2.5 pts/year, cap 25), trial phase lead (6.25 pts/phase, cap 25), FDA approvals (10 pts/approval, cap 20). Inverted in composite formula.
+
+**Adverse Event Divergence Score (0-100):** Analyzes FDA FAERS safety signals. Components: death reports (7 pts each, cap 35), serious ratio (ratio x 50, cap 25), hospitalization burden (4 pts/report, cap 20), log-normalized volume (log2 x 3, cap 20). Divergence levels: NORMAL (0-24), ELEVATED (25-49), CONCERNING (50-74), CRITICAL (75-100).
+
+**Literature Momentum Score (0-100):** Measures publication acceleration. Components: volume (3 pts/pub, cap 30), recency (5 pts/recent pub, cap 30), acceleration ratio (25, triggers at 20% threshold), journal diversity (3 pts/journal, cap 15).
+
+**Composite Score Formula:** round(pipelineThreat * 0.30 + adverseEventDivergence * 0.25 + literatureMomentum * 0.25 + (100 - firstMoverAdvantage) * 0.20)
+
+---
+
+## Connection
+
+MCP endpoint: `https://red-cars--pharma-pipeline-intelligence-mcp.apify.actor/mcp`
+
+```json
+{
+  "mcpServers": {
+    "pharma-pipeline-intelligence-mcp": {
+      "url": "https://red-cars--pharma-pipeline-intelligence-mcp.apify.actor/mcp"
+    }
+  }
+}
+```
+
+---
+
+## Cross-Sell Chain
+
+- **drug-intelligence-mcp** — FDA drug labels, adverse events, NDC codes
+- **healthcare-compliance-mcp** — Medical device compliance, 510(k) clearances
+- **academic-research-mcp** — PubMed papers, NIH grants
+- **patent-search-mcp** — Patent landscape, FTO analysis
+
+Workflow: pharma-pipeline → drug-intelligence → healthcare-compliance for comprehensive pharma intelligence.

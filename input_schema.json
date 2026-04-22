@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "properties": {
+    "query": {
+      "type": "string",
+      "title": "Query",
+      "description": "Drug name, condition, or therapeutic area to search",
+      "editor": "textfield"
+    },
+    "status": {
+      "type": "string",
+      "title": "Status",
+      "description": "RECURITING, ACTIVE_NOT_RECRUITING, COMPLETED",
+      "editor": "textfield"
+    },
+    "phase": {
+      "type": "string",
+      "title": "Phase",
+      "description": "PHASE1, PHASE2, PHASE3, PHASE4",
+      "editor": "textfield"
+    },
+    "maxResults": {
+      "type": "integer",
+      "title": "Max Results",
+      "description": "Maximum results (default: 50, max: 50)",
+      "default": 50,
+      "editor": "textfield"
+    },
+    "company": {
+      "type": "string",
+      "title": "Company",
+      "description": "Company name",
+      "editor": "textfield"
+    },
+    "drug": {
+      "type": "string",
+      "title": "Drug",
+      "description": "Drug name",
+      "editor": "textfield"
+    },
+    "indication": {
+      "type": "string",
+      "title": "Indication",
+      "description": "Indication for ClinicalTrials.gov query",
+      "editor": "textfield"
+    },
+    "classification": {
+      "type": "string",
+      "title": "Classification",
+      "description": "Class I, Class II, Class III",
+      "editor": "textfield"
+    },
+    "limit": {
+      "type": "integer",
+      "title": "Limit",
+      "description": "Max records (default: 100, max: 500)",
+      "default": 100,
+      "editor": "textfield"
+    }
+  },
+  "required": ["query"]
+}
