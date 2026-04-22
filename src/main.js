@@ -928,72 +928,173 @@ async function handleMCPRequest(request) {
 }
 
 // =============================================================================
-// HTTP SERVER (Standby Mode Readiness Probe)
+// TOOL ROUTER
 // =============================================================================
 
-function createHttpServer() {
-    const server = http.createServer((req, res) => {
-        if (req.url === '/health' || req.url === '/') {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ status: 'ok' }));
-        } else {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Not found' }));
+async function handleTool(toolName, params = {}) {
+    // PPE charging
+    const price = PPE_PRICES[toolName];
+    if (price && Actor) {
+        try {
+            await Actor.charge(price, { eventName: toolName });
+        } catch (chargeError) {
+            console.warn('PPE charging failed:', chargeError.message);
         }
-    });
-    return server;
-}
+    }
 
-// =============================================================================
-// MAIN ENTRY POINT
-// =============================================================================
-
-export async function handleRequest(request) {
-    try {
-        // Parse MCP request
-        const { action, tool, params } = request;
-
-        if (action === 'list_tools') {
-            return { tools: TOOLS };
-        }
-
-        if (action === 'invoke_tool') {
-            // PPE charging
-            const price = PPE_PRICES[tool];
-            if (price && Actor) {
-                try {
-                    await Actor.charge({ eventName: tool, eventPriceUsd: price });
-                } catch (chargeError) {
-                    console.warn('PPE charging failed:', chargeError.message);
-                }
-            }
-
-            const result = await handleMCPRequest({ tool, params });
-            return { result };
-        }
-
-        // Unknown action
-        throw new Error(`Unknown action: ${action}`);
-    } catch (error) {
-        return { error: error.message };
+    // Route to handler
+    switch (toolName) {
+        case 'search_drug_pipeline':
+            return await handleSearchDrugPipeline(params);
+        case 'analyze_competitive_landscape':
+            return await handleAnalyzeCompetitiveLandscape(params);
+        case 'detect_adverse_event_signals':
+            return await handleDetectAdverseEventSignals(params);
+        case 'track_patent_exclusivity':
+            return await handleTrackPatentExclusivity(params);
+        case 'compare_regulatory_pathways':
+            return await handleCompareRegulatoryPathways(params);
+        case 'monitor_drug_recalls':
+            return await handleMonitorDrugRecalls(params);
+        case 'assess_literature_momentum':
+            return await handleAssessLiteratureMomentum(params);
+        case 'generate_pipeline_threat_report':
+            return await handleGeneratePipelineThreatReport(params);
+        default:
+            throw new Error(`Unknown tool: ${toolName}`);
     }
 }
 
 // =============================================================================
-// INITIALIZATION
+// MCP HTTP SERVER (Standby Mode)
 // =============================================================================
 
-const PORT = parseInt(process.env.PORT || '4321', 10);
+await Actor.init();
 
-const server = createHttpServer();
-server.listen(PORT, () => {
-    console.log(`Pharma Pipeline Intelligence MCP server running on port ${PORT}`);
-    console.log(`MCP endpoint: /mcp`);
-});
+const isStandby = Actor.config.get('metaOrigin') === 'STANDBY';
 
-// Handle graceful shutdown
-process.on('SIGTERM', () => {
-    server.close(() => {
-        process.exit(0);
+if (isStandby) {
+    // Standby mode: start HTTP server for MCP requests
+    const PORT = Actor.config.get('containerPort') || process.env.ACTOR_WEB_SERVER_PORT || 3000;
+
+    const server = http.createServer(async (req, res) => {
+        // Handle readiness probe
+        if (req.headers['x-apify-container-server-readiness-probe']) {
+            res.writeHead(200, { 'Content-Type': 'text/plain' });
+            res.end('OK');
+            return;
+        }
+
+        // Handle MCP requests
+        if (req.method === 'POST' && req.url === '/mcp') {
+            let body = '';
+            req.on('data', chunk => { body += chunk; });
+            req.on('end', async () => {
+                try {
+                    const jsonBody = JSON.parse(body);
+                    const id = jsonBody.id ?? null;
+
+                    const reply = (result) => {
+                        const resp = id !== null
+                            ? { jsonrpc: '2.0', id, result }
+                            : result;
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify(resp));
+                    };
+
+                    const replyError = (code, message) => {
+                        const resp = id !== null
+                            ? { jsonrpc: '2.0', id, error: { code, message } }
+                            : { status: 'error', error: message };
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify(resp));
+                    };
+
+                    const method = jsonBody.method;
+
+                    // Standard MCP: initialize
+                    if (method === 'initialize') {
+                        return reply({
+                            protocolVersion: '2024-11-05',
+                            capabilities: { tools: {} },
+                            serverInfo: { name: 'pharma-pipeline-intelligence-mcp', version: '1.0.0' }
+                        });
+                    }
+
+                    // Standard MCP: tools/list
+                    if (method === 'tools/list' || (!method && jsonBody.tool === 'list')) {
+                        return reply({ tools: TOOLS });
+                    }
+
+                    // Standard MCP: tools/call
+                    if (method === 'tools/call') {
+                        const toolName = jsonBody.params?.name;
+                        const toolArgs = jsonBody.params?.arguments || {};
+                        if (!toolName) return replyError(-32602, 'Missing params.name');
+                        const toolResult = await handleTool(toolName, toolArgs);
+                        return reply({
+                            content: [{ type: 'text', text: JSON.stringify(toolResult, null, 2) }]
+                        });
+                    }
+
+                    // Legacy: tools/{toolName} method format
+                    if (method && method.startsWith('tools/')) {
+                        const toolName = method.slice(6);
+                        const toolArgs = jsonBody.params || {};
+                        const toolResult = await handleTool(toolName, toolArgs);
+                        return reply({
+                            content: [{ type: 'text', text: JSON.stringify(toolResult, null, 2) }]
+                        });
+                    }
+
+                    // Legacy direct: {tool: "...", params: {...}}
+                    if (jsonBody.tool) {
+                        const toolResult = await handleTool(jsonBody.tool, jsonBody.params || {});
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ status: 'success', result: toolResult }));
+                        return;
+                    }
+
+                    return replyError(-32601, 'Method not found');
+                } catch (err) {
+                    return replyError(-32603, err.message);
+                }
+            });
+            return;
+        }
+
+        // Not found
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
     });
-});
+
+    server.listen(PORT, () => {
+        console.log(`Pharma Pipeline Intelligence MCP listening on port ${PORT}`);
+    });
+
+    server.on('error', (err) => {
+        console.error('Server error:', err);
+        process.exit(1);
+    });
+
+    // Handle graceful shutdown
+    process.on('SIGTERM', () => {
+        server.close(() => process.exit(0));
+    });
+
+    return; // Keep the server running
+}
+
+// =============================================================================
+// NON-STANDBY MODE (direct invocation)
+// =============================================================================
+
+// If not standby, run a single invocation from input
+const input = await Actor.getInput();
+if (input) {
+    const { tool, params = {} } = input;
+    const result = await handleTool(tool, params);
+    await Actor.setValue('OUTPUT', result);
+}
+
+await Actor.exit();
