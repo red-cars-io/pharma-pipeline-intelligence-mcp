@@ -1,8 +1,6 @@
-# Pharma Pipeline Intelligence MCP Server
+# Pharma Pipeline Intelligence MCP
 
-> **[View on Apify](https://apify.com)** | **[Use on Apify Store](https://apify.com)**
-
-AI agents for pharmaceutical competitive intelligence — clinical trials, FDA/EMA approvals, adverse event signals, patent cliffs, and regulatory pathways across 7 government databases. Generates composite Pipeline Threat Scores (0-100) for biotech investors, business development teams, and medical affairs.
+Competitive pharmaceutical pipeline intelligence for AI agents. Search clinical trials, analyze FDA approvals, detect adverse events, and track drug recalls.
 
 ---
 
