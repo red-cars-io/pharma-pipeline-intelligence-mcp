@@ -30,6 +30,12 @@ AI agents can now assess competitive pressure in any therapeutic area, evaluate 
 
 ---
 
+## Comparison
+
+See how Pharma Pipeline Intelligence MCP compares to ClinicalTrials.gov, manual research, and commercial platforms: [COMPARISON.md](./COMPARISON.md)
+
+---
+
 ## 3. When to Call This MCP
 
 Use Pharma Pipeline Intelligence MCP when you need to:
@@ -194,7 +200,7 @@ Returns: FDA approvals list, regulatoryGapMetric: null, note explaining EMA unav
 
 ### Step 1: Get your Apify API token (optional)
 
-Sign up at [apify.com](https://apify.com) and copy your API token from the console. The MCP works without an API token for tool calls, but Apify authentication may be required by some MCP clients.
+Sign up at [apify.com/red.cars/pharma-pipeline-intelligence-mcp](https://apify.com/red.cars/pharma-pipeline-intelligence-mcp) and copy your API token from the console. The MCP works without an API token for tool calls, but Apify authentication may be required by some MCP clients.
 
 ### Step 2: Add the MCP server to your client
 
@@ -673,6 +679,9 @@ AI agents researching competitive threats can: (1) assess pipeline threat and sa
 ---
 
 ## SEO Keywords
+
+- [Comparison: vs clinicaltrials.gov](COMPARISON.md)
+- [Pharma Pipeline Intelligence MCP vs ClinicalTrials.gov + Manual Research](COMPARISON.md)
 
 pharma pipeline intelligence MCP, pharmaceutical competitive intelligence, clinical trials API, FDA drug approvals, adverse event signals, patent cliff monitoring, pipeline threat score, biotech investment AI, drug safety surveillance, no API key needed, AI agent MCP server, LLM drug pipeline, Claude pharma, Cursor biotech, pharmaceutical AI agent, ClinicalTrials.gov API, USPTO patent search, PubMed literature trends, FAERS adverse events, drug recall tracking, regulatory pathway analysis, pharma BD intelligence, medical affairs surveillance, generic entry strategy, First-Mover Advantage, Literature Momentum Score, Apify MCP, MCP server pharmaceutical, biotech due diligence AI, competitive landscape AI
 
