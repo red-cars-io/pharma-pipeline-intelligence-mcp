@@ -1,982 +1,859 @@
-import { Actor } from 'apify';
+/**
+ * Healthcare Compliance MCP Server
+ * Medical device compliance intelligence for AI agents.
+ * Data sources: FDA openFDA API + ClinicalTrials.gov
+ */
+
 import http from 'http';
+import Apify, { Actor } from 'apify';
 
-// =============================================================================
-// CONSTANTS & API ENDPOINTS (VERIFIED ONLY)
-// =============================================================================
+// Always call Actor.init() once unconditionally
+await Actor.init();
 
-const API_BASE_CLINICAL_TRIALS = 'https://clinicaltrials.gov/api/v2/studies';
-const API_BASE_FDA_DRUGS = 'https://api.fda.gov/drug/drugsfda.json';
-const API_BASE_FDA_EVENT = 'https://api.fda.gov/drug/event.json';
-const API_BASE_FDA_ENFORCEMENT = 'https://api.fda.gov/drug/enforcement.json';
-const API_BASE_USPTO = 'https://patft.api.uspto.gov';
-const API_BASE_PUBMED = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils';
+// Check standby AFTER init using env var
+const isStandby = process.env.APIFY_META_ORIGIN === 'STANDBY';
+const PORT = Actor.config.get('standbyPort') || 3000;
 
-const TIMEOUT_MS = 120000;
-
-// =============================================================================
-// MCP TOOL DEFINITIONS
-// =============================================================================
-
-const TOOLS = [
-    {
-        name: 'search_drug_pipeline',
-        description: 'Search ClinicalTrials.gov for clinical trials by drug, condition, or therapeutic area',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Drug name, condition, or therapeutic area' },
-                status: { type: 'string', description: 'RECRUITING, ACTIVE_NOT_RECRUITING, COMPLETED' },
-                phase: { type: 'string', description: 'PHASE1, PHASE2, PHASE3, PHASE4' },
-                maxResults: { type: 'integer', description: 'Maximum results (default: 50, max: 50)', default: 50 }
-            },
-            required: ['query']
-        }
-    },
-    {
-        name: 'analyze_competitive_landscape',
-        description: 'FDA competitive analysis with Pipeline Threat Score',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Drug class, therapeutic area, or active ingredient' }
-            },
-            required: ['query']
-        }
-    },
-    {
-        name: 'detect_adverse_event_signals',
-        description: 'Analyze FDA FAERS reports for adverse event signals with Divergence Score',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Drug name or active ingredient' },
-                limit: { type: 'integer', description: 'Max FAERS records (default: 100, max: 500)', default: 100 }
-            },
-            required: ['query']
-        }
-    },
-    {
-        name: 'track_patent_exclusivity',
-        description: 'USPTO patent portfolio analysis with First-Mover Advantage Score',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Drug name, compound, mechanism, or assignee' }
-            },
-            required: ['query']
-        }
-    },
-    {
-        name: 'compare_regulatory_pathways',
-        description: 'FDA regulatory analysis and approval status (EMA data unavailable)',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Drug name, active substance, or therapeutic area' }
-            },
-            required: ['query']
-        }
-    },
-    {
-        name: 'monitor_drug_recalls',
-        description: 'Search FDA drug recall database by drug, manufacturer, or classification',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Drug name, manufacturer, or recall reason' },
-                classification: { type: 'string', description: 'Class I, Class II, Class III' }
-            },
-            required: ['query']
-        }
-    },
-    {
-        name: 'assess_literature_momentum',
-        description: 'PubMed publication trend analysis with Literature Momentum Score',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Drug name, condition, mechanism, or research topic' },
-                maxResults: { type: 'integer', description: 'Maximum publications (default: 50)', default: 50 }
-            },
-            required: ['query']
-        }
-    },
-    {
-        name: 'generate_pipeline_threat_report',
-        description: 'Full composite report: 4 sub-model scores + composite Pipeline Threat Score (0-100)',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                company: { type: 'string', description: 'Company name' },
-                drug: { type: 'string', description: 'Drug name' },
-                indication: { type: 'string', description: 'Appended to ClinicalTrials.gov query' }
-            },
-            required: ['company', 'drug']
-        }
-    }
-];
-
-// =============================================================================
-// MCP MANIFEST
-// =============================================================================
-
+// MCP manifest
 const MCP_MANIFEST = {
-    name: 'pharma-pipeline-intelligence-mcp',
-    version: '1.0',
-    description: 'Competitive intelligence for pharmaceutical AI agents',
-    tools: TOOLS
+    schema_version: "1.0",
+    name: "pharma-test-mcp",
+    version: "1.0.0",
+    description: "Medical device compliance intelligence for AI agents. Access FDA MAUDE adverse events, 510(k) clearances, device recalls, and ClinicalTrials.gov registry data.",
+    tools: [
+        {
+            name: "search_device_events",
+            description: "Search FDA MAUDE database for medical device adverse event reports",
+            input_schema: {
+                type: "object",
+                properties: {
+                    device_name: { type: "string", description: "Device name (e.g., 'pacemaker', 'insulin pump')" },
+                    manufacturer: { type: "string", description: "Manufacturer name" },
+                    product_code: { type: "string", description: "FDA product code" },
+                    date_from: { type: "string", description: "Start date YYYYMMDD" },
+                    date_to: { type: "string", description: "End date YYYYMMDD" },
+                    max_results: { type: "integer", description: "Maximum results (default: 10)", default: 10 }
+                }
+            },
+            output_schema: {
+                type: "object",
+                properties: {
+                    query: { type: "object", description: "The original search parameters" },
+                    total_events: { type: "integer", description: "Total matching adverse event reports in FDA database" },
+                    events: {
+                        type: "array",
+                        description: "List of adverse event reports",
+                        items: {
+                            type: "object",
+                            properties: {
+                                event_id: { type: "string", description: "Unique FDA event identifier" },
+                                device_name: { type: "string", description: "Generic device name" },
+                                manufacturer: { type: "string", description: "Device manufacturer" },
+                                product_code: { type: "string", description: "FDA product code" },
+                                date_of_event: { type: "string", description: "Date of event (YYYYMMDD)" },
+                                adverse_event_description: { type: "string", description: "Description of adverse event" }
+                            }
+                        }
+                    },
+                    source: { type: "string", description: "Data source (FDA MAUDE)" }
+                }
+            },
+            price: 0.05
+        },
+        {
+            name: "get_device_510k_clearance",
+            description: "Get 510(k) premarket clearance details for a medical device",
+            input_schema: {
+                type: "object",
+                properties: {
+                    applicant: { type: "string", description: "Applicant/manufacturer name" },
+                    product_code: { type: "string", description: "FDA product code" },
+                    device_name: { type: "string", description: "Device name" },
+                    date_from: { type: "string", description: "Start date YYYYMMDD" },
+                    date_to: { type: "string", description: "End date YYYYMMDD" },
+                    max_results: { type: "integer", description: "Maximum results (default: 10)", default: 10 }
+                }
+            },
+            output_schema: {
+                type: "object",
+                properties: {
+                    query: { type: "object", description: "The original search parameters" },
+                    total_clearances: { type: "integer", description: "Total matching 510(k) clearances in FDA database" },
+                    clearances: {
+                        type: "array",
+                        description: "List of 510(k) premarket clearance records",
+                        items: {
+                            type: "object",
+                            properties: {
+                                k_number: { type: "string", description: "510(k) submission number" },
+                                device_name: { type: "string", description: "Device name" },
+                                applicant: { type: "string", description: "Applicant/manufacturer" },
+                                product_code: { type: "string", description: "FDA product code" },
+                                decision_date: { type: "string", description: "FDA decision date (YYYYMMDD)" },
+                                decision_code: { type: "string", description: "FDA decision code" },
+                                submission_type: { type: "string", description: "Type of submission" }
+                            }
+                        }
+                    },
+                    source: { type: "string", description: "Data source (FDA 510(k))" }
+                }
+            },
+            price: 0.03
+        },
+        {
+            name: "get_device_recalls",
+            description: "Search FDA enforcement reports for medical device recalls",
+            input_schema: {
+                type: "object",
+                properties: {
+                    recalling_firm: { type: "string", description: "Recalling firm name" },
+                    product_code: { type: "string", description: "FDA product code" },
+                    classification: { type: "string", description: "Recall classification (Class I, Class II, Class III)" },
+                    date_from: { type: "string", description: "Start date YYYYMMDD" },
+                    date_to: { type: "string", description: "End date YYYYMMDD" },
+                    max_results: { type: "integer", description: "Maximum results (default: 10)", default: 10 }
+                }
+            },
+            output_schema: {
+                type: "object",
+                properties: {
+                    query: { type: "object", description: "The original search parameters" },
+                    total_recalls: { type: "integer", description: "Total matching recall records in FDA database" },
+                    recalls: {
+                        type: "array",
+                        description: "List of FDA device recall records",
+                        items: {
+                            type: "object",
+                            properties: {
+                                recall_id: { type: "string", description: "FDA recall identifier" },
+                                device_description: { type: "string", description: "Description of recalled device" },
+                                recalling_firm: { type: "string", description: "Firm initiating recall" },
+                                classification: { type: "string", description: "Recall classification (Class I, II, III)" },
+                                recall_initiation_date: { type: "string", description: "Date recall was initiated (YYYYMMDD)" },
+                                product_code: { type: "string", description: "FDA product code" },
+                                status: { type: "string", description: "Recall status" }
+                            }
+                        }
+                    },
+                    source: { type: "string", description: "Data source (FDA Enforcement)" }
+                }
+            },
+            price: 0.05
+        },
+        {
+            name: "search_clinical_trials",
+            description: "Search ClinicalTrials.gov for clinical trials",
+            input_schema: {
+                type: "object",
+                properties: {
+                    condition: { type: "string", description: "Medical condition (e.g., 'diabetes', 'cancer')" },
+                    intervention: { type: "string", description: "Intervention name or type" },
+                    sponsor: { type: "string", description: "Sponsor name" },
+                    phase: { type: "string", description: "Trial phase (PHASE1, PHASE2, PHASE3, PHASE4)" },
+                    status: { type: "string", description: "Trial status (RECRUITING, COMPLETED, etc.)" },
+                    max_results: { type: "integer", description: "Maximum results (default: 10)", default: 10 }
+                }
+            },
+            output_schema: {
+                type: "object",
+                properties: {
+                    query: { type: "object", description: "The original search parameters" },
+                    total_trials: { type: "integer", description: "Number of trials returned" },
+                    trials: {
+                        type: "array",
+                        description: "List of clinical trials",
+                        items: {
+                            type: "object",
+                            properties: {
+                                nct_id: { type: "string", description: "ClinicalTrials.gov NCT ID" },
+                                title: { type: "string", description: "Brief title of the trial" },
+                                phase: { type: "string", description: "Trial phase (PHASE1, PHASE2, etc.)" },
+                                status: { type: "string", description: "Overall recruitment status" },
+                                conditions: { type: "array", items: { type: "string" }, description: "Medical conditions studied" },
+                                enrollment_count: { type: "integer", description: "Planned enrollment number" },
+                                sponsor: { type: "string", description: "Lead sponsor name" },
+                                start_date: { type: "string", description: "Trial start date" },
+                                completion_date: { type: "string", description: "Anticipated completion date" }
+                            }
+                        }
+                    },
+                    source: { type: "string", description: "Data source (ClinicalTrials.gov)" }
+                }
+            },
+            price: 0.05
+        },
+        {
+            name: "get_trial_details",
+            description: "Get detailed information about a specific clinical trial by NCT ID",
+            input_schema: {
+                type: "object",
+                properties: {
+                    nct_id: { type: "string", description: "ClinicalTrials.gov NCT ID (e.g., 'NCT000001')", required: true }
+                },
+                required: ["nct_id"]
+            },
+            output_schema: {
+                type: "object",
+                properties: {
+                    nct_id: { type: "string", description: "ClinicalTrials.gov NCT ID" },
+                    title: { type: "string", description: "Brief title of the trial" },
+                    official_title: { type: "string", description: "Official trial title" },
+                    phase: { type: "string", description: "Trial phase" },
+                    status: { type: "string", description: "Overall recruitment status" },
+                    conditions: { type: "array", items: { type: "string" }, description: "Medical conditions" },
+                    interventions: {
+                        type: "array",
+                        items: {
+                            type: "object",
+                            properties: {
+                                type: { type: "string" },
+                                name: { type: "string" }
+                            }
+                        },
+                        description: "Intervention types and names"
+                    },
+                    design: {
+                        type: "object",
+                        description: "Trial design parameters",
+                        properties: {
+                            primary_purpose: { type: "string" },
+                            allocation: { type: "string" },
+                            intervention_model: { type: "string" },
+                            masking: { type: "string" }
+                        }
+                    },
+                    enrollment: {
+                        type: "object",
+                        properties: {
+                            count: { type: "integer" },
+                            type: { type: "string" }
+                        },
+                        description: "Enrollment info"
+                    },
+                    sponsor: { type: "string", description: "Lead sponsor name" },
+                    lead_sponsor: { type: "string", description: "Lead sponsor" },
+                    start_date: { type: "string", description: "Trial start date" },
+                    completion_date: { type: "string", description: "Anticipated completion date" },
+                    summary: { type: "string", description: "Brief summary of the trial" },
+                    source: { type: "string", description: "Data source (ClinicalTrials.gov)" }
+                }
+            },
+            price: 0.03
+        },
+        {
+            name: "screen_device_compliance",
+            description: "Composite compliance risk score for a medical device across all FDA data sources",
+            input_schema: {
+                type: "object",
+                properties: {
+                    device_name: { type: "string", description: "Device name", required: true },
+                    manufacturer: { type: "string", description: "Manufacturer name" }
+                },
+                required: ["device_name"]
+            },
+            output_schema: {
+                type: "object",
+                properties: {
+                    device_name: { type: "string", description: "Device name queried" },
+                    manufacturer: { type: "string", description: "Manufacturer name" },
+                    compliance_score: { type: "number", description: "Composite compliance score 0-100 (higher = cleaner)" },
+                    risk_level: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"], description: "Risk level based on score" },
+                    signals: {
+                        type: "object",
+                        description: "Detailed signal breakdown",
+                        properties: {
+                            adverse_event_rate: { type: "object", description: "Adverse event signal" },
+                            recall_history: { type: "object", description: "Recall history signal" },
+                            enforcement_actions: { type: "object", description: "Enforcement action signal" }
+                        }
+                    },
+                    adverse_events_count: { type: "integer", description: "Total adverse event reports found" },
+                    recall_count: { type: "integer", description: "Total recalls found" },
+                    "510k_clearances": { type: "integer", description: "Number of 510(k) clearances" },
+                    last_510k_date: { type: ["string", "null"], description: "Date of most recent 510(k) clearance" },
+                    verdict: { type: "string", description: "Human-readable compliance assessment" },
+                    source: { type: "string", description: "Data sources queried" }
+                }
+            },
+            price: 0.10
+        },
+        {
+            name: "assess_manufacturer_quality",
+            description: "Multi-source quality assessment for a medical device manufacturer",
+            input_schema: {
+                type: "object",
+                properties: {
+                    manufacturer_name: { type: "string", description: "Manufacturer name", required: true }
+                },
+                required: ["manufacturer_name"]
+            },
+            output_schema: {
+                type: "object",
+                properties: {
+                    manufacturer_name: { type: "string", description: "Manufacturer name" },
+                    quality_score: { type: "number", description: "Quality score 0-100" },
+                    risk_level: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"], description: "Risk level" },
+                    signals: {
+                        type: "object",
+                        description: "Quality signal breakdown",
+                        properties: {
+                            device_adverse_event_rate: { type: "object" },
+                            recall_rate: { type: "object" },
+                            clearance_velocity: { type: "object" },
+                            enforcement_history: { type: "object" }
+                        }
+                    },
+                    total_510k_clearances: { type: "integer", description: "Total 510(k) clearances" },
+                    total_adverse_events: { type: "integer", description: "Total adverse events" },
+                    active_recalls: { type: "integer", description: "Active recalls" },
+                    device_categories: { type: "array", items: { type: "string" }, description: "FDA product codes with 510(k) clearances" },
+                    verdict: { type: "string", description: "Human-readable quality assessment" },
+                    source: { type: "string" }
+                }
+            },
+            price: 0.08
+        },
+        {
+            name: "generate_compliance_report",
+            description: "Full compliance intelligence report for a medical device",
+            input_schema: {
+                type: "object",
+                properties: {
+                    device_name: { type: "string", description: "Device name", required: true },
+                    manufacturer: { type: "string", description: "Manufacturer name" },
+                    include_clinical_trials: { type: "boolean", description: "Include clinical trial data", default: false }
+                },
+                required: ["device_name"]
+            },
+            output_schema: {
+                type: "object",
+                properties: {
+                    device_name: { type: "string" },
+                    manufacturer: { type: "string" },
+                    report_date: { type: "string", description: "ISO date of report generation" },
+                    compliance_score: { type: "number" },
+                    risk_level: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+                    executive_summary: { type: "string", description: "Plain-text executive summary" },
+                    sections: {
+                        type: "object",
+                        description: "Report sections",
+                        properties: {
+                            "510k_clearance": {
+                                type: "object",
+                                properties: {
+                                    status: { type: "string" },
+                                    clearance_count: { type: "integer" },
+                                    last_clearance: { type: ["string", "null"] }
+                                }
+                            },
+                            adverse_events: {
+                                type: "object",
+                                properties: {
+                                    total_events: { type: "integer" },
+                                    rate_assessment: { type: "string" }
+                                }
+                            },
+                            recalls: {
+                                type: "object",
+                                properties: {
+                                    active_recalls: { type: "integer" },
+                                    recall_risk: { type: "string" }
+                                }
+                            },
+                            clinical_trials: {
+                                type: ["object", "null"],
+                                description: "Clinical trial data if include_clinical_trials=true"
+                            }
+                        }
+                    },
+                    sources: { type: "array", items: { type: "string" }, description: "Data sources used in report" },
+                    data: {
+                        type: "object",
+                        description: "Raw data from underlying API calls",
+                        properties: {
+                            events: { type: "object" },
+                            trials: { type: ["object", "null"] }
+                        }
+                    }
+                }
+            },
+            price: 0.15
+        }
+    ]
 };
 
-// =============================================================================
-// API CLIENTS
-// =============================================================================
+// Tool price map (in USD)
+const TOOL_PRICES = {
+    "search_device_events": 0.05,
+    "get_device_510k_clearance": 0.03,
+    "get_device_recalls": 0.05,
+    "search_clinical_trials": 0.05,
+    "get_trial_details": 0.03,
+    "screen_device_compliance": 0.10,
+    "assess_manufacturer_quality": 0.08,
+    "generate_compliance_report": 0.15
+};
 
-async function fetchWithTimeout(url, options = {}) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+// ============================================
+// FDA API CLIENTS
+// ============================================
+
+async function fetchFDA(endpoint, searchParams = {}) {
     try {
-        const response = await fetch(url, {
-            ...options,
-            signal: controller.signal
-        });
-        clearTimeout(timeout);
-        return response;
-    } catch (error) {
-        clearTimeout(timeout);
-        throw error;
+        const params = new URLSearchParams();
+        if (searchParams.search) params.set('search', searchParams.search);
+        if (searchParams.limit) params.set('limit', searchParams.limit);
+        if (searchParams.count) params.set('count', searchParams.count);
+
+        const url = `https://api.fda.gov/device/${endpoint}.json?${params}`;
+        const resp = await fetch(url);
+        return await resp.json();
+    } catch (e) {
+        console.error(`FDA API error (${endpoint}):`, e.message);
+        return { results: [], meta: { results: { total: 0 } } };
     }
 }
 
-// ClinicalTrials.gov API v2
-async function searchClinicalTrials(query, status, phase, maxResults = 50) {
+async function searchDeviceEvents(params = {}) {
+    const searchParts = [];
+    if (params.device_name) searchParts.push(`device.generic_name:${params.device_name}`);
+    if (params.manufacturer) searchParts.push(`device.manufacturer_d_name:${params.manufacturer}`);
+    if (params.product_code) searchParts.push(`device.product_code:${params.product_code}`);
+    if (params.date_from && params.date_to) {
+        searchParts.push(`date_of_event:[${params.date_from}+TO+${params.date_to}]`);
+    }
+
+    const search = searchParts.join('+');
+    const result = await fetchFDA('event', { search, limit: params.max_results || 10 });
+
+    const events = (result.results || []).map(e => ({
+        event_id: e.event_id || '',
+        device_name: e.device?.generic_name || '',
+        manufacturer: e.device?.manufacturer_d_name || '',
+        product_code: e.device?.product_code || '',
+        date_of_event: e.date_of_event || '',
+        adverse_event_description: e.manufacturer_submission_number || ''
+    }));
+
+    return {
+        query: params,
+        total_events: result.meta?.results?.total || events.length,
+        events,
+        source: "FDA MAUDE"
+    };
+}
+
+async function getDevice510kClearance(params = {}) {
+    const searchParts = [];
+    if (params.applicant) searchParts.push(`applicant:${params.applicant}`);
+    if (params.product_code) searchParts.push(`product_code:${params.product_code}`);
+    if (params.device_name) searchParts.push(`device_name:${params.device_name}`);
+    if (params.date_from && params.date_to) {
+        searchParts.push(`decision_date:[${params.date_from}+TO+${params.date_to}]`);
+    }
+
+    const search = searchParts.join('+');
+    const result = await fetchFDA('510k', { search, limit: params.max_results || 10 });
+
+    const clearances = (result.results || []).map(c => ({
+        k_number: c.k_number || '',
+        device_name: c.device_name || '',
+        applicant: c.applicant || '',
+        product_code: c.product_code || '',
+        decision_date: c.decision_date || '',
+        decision_code: c.decision_code || '',
+        submission_type: c.submission_type || ''
+    }));
+
+    return {
+        query: params,
+        total_clearances: result.meta?.results?.total || clearances.length,
+        clearances,
+        source: "FDA 510(k)"
+    };
+}
+
+async function getDeviceRecalls(params = {}) {
+    const searchParts = [];
+    if (params.recalling_firm) searchParts.push(`recalling_firm:${params.recalling_firm}`);
+    if (params.product_code) searchParts.push(`product_code:${params.product_code}`);
+    if (params.classification) searchParts.push(`classification:${params.classification}`);
+    if (params.date_from && params.date_to) {
+        searchParts.push(`recall_initiation_date:[${params.date_from}+TO+${params.date_to}]`);
+    }
+
+    const search = searchParts.join('+');
+    const result = await fetchFDA('enforcement', { search, limit: params.max_results || 10 });
+
+    const recalls = (result.results || []).map(r => ({
+        recall_id: r.recall_number || '',
+        device_description: r.product_description || '',
+        recalling_firm: r.recalling_firm || '',
+        classification: r.classification || '',
+        recall_initiation_date: r.recall_initiation_date || '',
+        product_code: r.product_code || '',
+        status: r.status || ''
+    }));
+
+    return {
+        query: params,
+        total_recalls: result.meta?.results?.total || recalls.length,
+        recalls,
+        source: "FDA Enforcement"
+    };
+}
+
+// ============================================
+// CLINICALTRIALS.GOV API CLIENT
+// ============================================
+
+async function searchClinicalTrials(params = {}) {
     try {
-        const params = new URLSearchParams({
-            'query.cond': query
-        });
-        if (status) params.append('query.status', status);
-        if (phase) params.append('query.phase', phase);
+        const queryParts = [];
+        if (params.condition) queryParts.push(`AREA[ConditionSearch]${params.condition}`);
+        if (params.intervention) queryParts.push(`AREA[InterventionName]${params.intervention}`);
+        if (params.sponsor) queryParts.push(`AREA[LeadSponsorName]${params.sponsor}`);
+        if (params.status) queryParts.push(`AREA[OverallStatus]${params.status}`);
 
-        const url = `${API_BASE_CLINICAL_TRIALS}?${params.toString()}`;
-        const response = await fetchWithTimeout(url);
+        const query = queryParts.join('+AND+');
+        const url = `https://clinicaltrials.gov/api/v2/studies?query.term=${query}&pageSize=${params.max_results || 10}`;
 
-        if (!response.ok) {
-            return { totalTrials: 0, phaseDistribution: {}, trials: [], source: 'ClinicalTrials.gov', error: `HTTP ${response.status}` };
-        }
+        const resp = await fetch(url);
+        const data = await resp.json();
 
-        const data = await response.json();
-        const studies = data.studies || [];
-        const trials = studies.slice(0, maxResults).map(study => {
-            const idModule = study.protocolSection?.identificationModule || {};
-            const statusModule = study.protocolSection?.statusModule || {};
-            const descriptionModule = study.protocolSection?.descriptionModule || {};
-            const eligibilityModule = study.protocolSection?.eligibilityModule || {};
-            const sponsorModule = study.protocolSection?.sponsorCollaboratorsModule || {};
-
+        const trials = (data.studies || []).map(s => {
+            const proto = s.protocolSection || {};
+            const design = proto.designModule || {};
             return {
-                nctId: idModule.nctId || 'Unknown',
-                title: descriptionModule?.briefSummary?.substring(0, 200) || 'No title',
-                phase: idModule?.phase || 'Not specified',
-                status: statusModule?.overallStatus || 'Unknown',
-                condition: idModule?.conditions?.[0] || 'Not specified',
-                enrollmentCount: eligibilityModule?.estimatedEnrollment || 0,
-                sponsor: sponsorModule?.leadSponsor?.name || 'Unknown',
-                startDate: statusModule?.startDateStruct?.date || null,
-                completionDate: statusModule?.completionDateStruct?.date || null
+                nct_id: proto.identificationModule?.nctId || '',
+                title: proto.identificationModule?.briefTitle || '',
+                phase: design.phases?.[0] || '',
+                status: proto.identificationModule?.overallStatus || '',
+                conditions: proto.conditionsModule?.conditions || [],
+                enrollment_count: design.enrollmentInfo?.count || 0,
+                sponsor: proto.identificationModule?.leadSponsor?.name || '',
+                start_date: proto.statusModule?.startDateStruct?.date || '',
+                completion_date: proto.statusModule?.completionDateStruct?.date || ''
             };
         });
 
-        // Phase distribution counting
-        const phaseDistribution = { 'Phase 1': 0, 'Phase 2': 0, 'Phase 3': 0, 'Phase 4': 0 };
-        studies.forEach(study => {
-            const phaseStr = (study.protocolSection?.identificationModule?.phase || '').toLowerCase();
-            if (phaseStr.includes('phase 1') || phaseStr === 'phase i') phaseDistribution['Phase 1']++;
-            else if (phaseStr.includes('phase 2') || phaseStr === 'phase ii') phaseDistribution['Phase 2']++;
-            else if (phaseStr.includes('phase 3') || phaseStr === 'phase iii') phaseDistribution['Phase 3']++;
-            else if (phaseStr.includes('phase 4') || phaseStr === 'phase iv') phaseDistribution['Phase 4']++;
-        });
-
         return {
-            totalTrials: studies.length,
-            phaseDistribution,
+            query: params,
+            total_trials: data.studies?.length || trials.length,
             trials,
-            source: 'ClinicalTrials.gov'
+            source: "ClinicalTrials.gov"
         };
-    } catch (error) {
-        return { totalTrials: 0, phaseDistribution: {}, trials: [], source: 'ClinicalTrials.gov', error: error.message };
+    } catch (e) {
+        console.error("ClinicalTrials API error:", e.message);
+        return { query: params, total_trials: 0, trials: [], source: "ClinicalTrials.gov" };
     }
 }
 
-// openFDA Drug Approvals
-async function searchFDADrugApprovals(query) {
+async function getTrialDetails(params = {}) {
     try {
-        const url = `${API_BASE_FDA_DRUGS}?search=openfda.brand_name:${encodeURIComponent(query)}&limit=50`;
-        const response = await fetchWithTimeout(url);
+        const url = `https://clinicaltrials.gov/api/v2/studies/${params.nct_id}`;
+        const resp = await fetch(url);
+        const data = await resp.json();
 
-        if (!response.ok) {
-            return { approvals: [], source: 'FDA Drug Approvals', error: `HTTP ${response.status}` };
-        }
-
-        const data = await response.json();
-        const results = data.results || [];
+        const proto = data.protocolSection || {};
+        const id = proto.identificationModule || {};
+        const design = proto.designModule || {};
+        const status = proto.statusModule || {};
+        const desc = proto.descriptionModule || {};
+        const arms = proto.armsInterventionsModule || {};
 
         return {
-            approvals: results.map(r => ({
-                applicationNumber: r.application_number || 'Unknown',
-                brandName: r.openfda?.brand_name?.[0] || 'Unknown',
-                genericName: r.openfda?.generic_name?.[0] || 'Unknown',
-                approvalDate: r.approval_date || 'Unknown',
-                indication: r.indications_and_usage?.[0] || 'Not specified',
-                company: r.openfda?.manufacturer_name?.[0] || 'Unknown',
-                productType: r.product_type || 'Unknown'
+            nct_id: id.nctId || params.nct_id,
+            title: id.briefTitle || '',
+            official_title: id.officialTitle || '',
+            phase: design.phases?.[0] || '',
+            status: id.overallStatus || '',
+            conditions: proto.conditionsModule?.conditions || [],
+            interventions: (arms.interventions || []).map(i => ({
+                type: i.type || '',
+                name: i.name || ''
             })),
-            source: 'FDA Drug Approvals'
+            design: {
+                primary_purpose: design.designInfo?.primaryPurpose || '',
+                allocation: design.designInfo?.allocation || '',
+                intervention_model: design.designInfo?.interventionModel || '',
+                masking: design.designInfo?.maskingInfo?.masking || ''
+            },
+            enrollment: {
+                count: design.enrollmentInfo?.count || 0,
+                type: design.enrollmentInfo?.type || ''
+            },
+            sponsor: id.leadSponsor?.name || '',
+            lead_sponsor: id.leadSponsor?.name || '',
+            start_date: status.startDateStruct?.date || '',
+            completion_date: status.completionDateStruct?.date || '',
+            summary: desc.briefSummary || '',
+            source: "ClinicalTrials.gov"
         };
-    } catch (error) {
-        return { approvals: [], source: 'FDA Drug Approvals', error: error.message };
+    } catch (e) {
+        console.error("ClinicalTrials API error:", e.message);
+        return { error: `Failed to fetch trial ${params.nct_id}: ${e.message}` };
     }
 }
 
-// openFDA FAERS (Adverse Events)
-async function searchFAAEReports(query, limit = 100) {
-    try {
-        const url = `${API_BASE_FDA_EVENT}?search=patient.drug.medicinalproduct:${encodeURIComponent(query)}&limit=${limit}`;
-        const response = await fetchWithTimeout(url);
+// ============================================
+// SCORING FUNCTIONS
+// ============================================
 
-        if (!response.ok) {
-            return { totalReports: 0, seriousEvents: 0, deathReports: 0, hospitalizationReports: 0, seriousRatio: 0, topReactions: [], source: 'FDA FAERS', error: `HTTP ${response.status}` };
-        }
+function calculateComplianceScore(data) {
+    let score = 100;
+    const { adverseEvents = 0, recalls = 0, enforcementActions = 0 } = data;
 
-        const data = await response.json();
-        const results = data.results || [];
+    // Adverse events reduce score
+    if (adverseEvents > 100) score -= 40;
+    else if (adverseEvents > 50) score -= 25;
+    else if (adverseEvents > 10) score -= 10;
+    else if (adverseEvents > 0) score -= 5;
 
-        let seriousEvents = 0;
-        let deathReports = 0;
-        let hospitalizationReports = 0;
-        const reactionCounts = {};
+    // Recalls reduce score
+    if (recalls > 5) score -= 35;
+    else if (recalls > 2) score -= 20;
+    else if (recalls > 0) score -= 10;
 
-        results.forEach(event => {
-            const seriousness = event.serious || [];
-            if (seriousness.includes('Death')) deathReports++;
-            if (seriousness.includes('Hospitalization')) hospitalizationReports++;
-            if (seriousness.length > 0) seriousEvents++;
+    // Enforcement actions reduce score more
+    if (enforcementActions > 0) score -= 30;
 
-            const reactions = event.reaction?.reactionmeddrapt?.keyword || [];
-            reactions.forEach(r => {
-                reactionCounts[r] = (reactionCounts[r] || 0) + 1;
-            });
-        });
-
-        const totalReports = results.length;
-        const topReactions = Object.entries(reactionCounts)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 10)
-            .map(([term, count]) => ({ term, count }));
-
-        return {
-            totalReports,
-            seriousEvents,
-            deathReports,
-            hospitalizationReports,
-            seriousRatio: totalReports > 0 ? seriousEvents / totalReports : 0,
-            topReactions,
-            source: 'FDA FAERS'
-        };
-    } catch (error) {
-        return { totalReports: 0, seriousEvents: 0, deathReports: 0, hospitalizationReports: 0, seriousRatio: 0, topReactions: [], source: 'FDA FAERS', error: error.message };
-    }
-}
-
-// openFDA Enforcement (Recalls)
-async function searchFDARecalls(query, classification) {
-    try {
-        const searchTerm = classification
-            ? `${query}+AND+product_description:${classification}`
-            : query;
-        const url = `${API_BASE_FDA_ENFORCEMENT}?search=${encodeURIComponent(searchTerm)}&limit=50`;
-        const response = await fetchWithTimeout(url);
-
-        if (!response.ok) {
-            return { totalRecalls: 0, classBreakdown: {}, recalls: [], source: 'FDA Enforcement', error: `HTTP ${response.status}` };
-        }
-
-        const data = await response.json();
-        const results = data.results || [];
-
-        const classBreakdown = { 'Class I': 0, 'Class II': 0, 'Class III': 0 };
-        results.forEach(r => {
-            const cls = r.classification || 'Unknown';
-            if (cls.includes('I')) classBreakdown['Class I']++;
-            else if (cls.includes('II')) classBreakdown['Class II']++;
-            else if (cls.includes('III')) classBreakdown['Class III']++;
-        });
-
-        return {
-            totalRecalls: results.length,
-            classBreakdown,
-            recalls: results.map(r => ({
-                recallId: r.recall_number || 'Unknown',
-                productDescription: r.product_description || 'Unknown',
-                reasonForRecall: r.reason_for_recall || 'Unknown',
-                classification: r.classification || 'Unknown',
-                recallingFirm: r.recalling_firm || 'Unknown',
-                distributionScope: r.distribution_pattern || 'Unknown',
-                recallInitiationDate: r.recall_initiation_date || 'Unknown'
-            })),
-            source: 'FDA Enforcement'
-        };
-    } catch (error) {
-        return { totalRecalls: 0, classBreakdown: {}, recalls: [], source: 'FDA Enforcement', error: error.message };
-    }
-}
-
-// USPTO Patents (basic search)
-async function searchUSPTO(query) {
-    try {
-        const url = `${API_BASE_USPTO}/cgi-bin/patsearch?query=${encodeURIComponent(query)}&retrieval_count=50`;
-        const response = await fetchWithTimeout(url, {
-            headers: { 'User-Agent': 'Mozilla/5.0' }
-        });
-
-        if (!response.ok) {
-            return { patentCount: 0, patents: [], source: 'USPTO', error: `HTTP ${response.status}` };
-        }
-
-        const html = await response.text();
-        // Basic HTML parsing for patent data - extract patent numbers and dates
-        const patentRegex = /<a href="\/cgi-bin\/patsearch\?query=([A-Z0-9]+)[^"]*"[^>]*>.*?(\d{4}-\d{2}-\d{2})/g;
-        const patents = [];
-        let match;
-        while ((match = patentRegex.exec(html)) !== null && patents.length < 50) {
-            patents.push({
-                patentNumber: match[1],
-                filingDate: match[2]
-            });
-        }
-
-        return {
-            patentCount: patents.length,
-            patents,
-            source: 'USPTO'
-        };
-    } catch (error) {
-        return { patentCount: 0, patents: [], source: 'USPTO', error: error.message };
-    }
-}
-
-// PubMed E-utilities
-async function searchPubMed(query, maxResults = 50) {
-    try {
-        // Search first
-        const searchUrl = `${API_BASE_PUBMED}/esearch.fcgi?db=pubmed&term=${encodeURIComponent(query)}&retmax=${maxResults}&retmode=json`;
-        const searchResponse = await fetchWithTimeout(searchUrl);
-
-        if (!searchResponse.ok) {
-            return { publicationCount: 0, recentPublications: 0, yearlyTrend: {}, topJournals: [], source: 'PubMed', error: `HTTP ${searchResponse.status}` };
-        }
-
-        const searchData = await searchResponse.json();
-        const idList = searchData.esearchresult?.idlist || [];
-        const count = parseInt(searchData.esearchresult?.count || '0', 10);
-
-        if (idList.length === 0) {
-            return { publicationCount: 0, recentPublications: 0, yearlyTrend: {}, topJournals: [], source: 'PubMed' };
-        }
-
-        // Fetch details for recent papers
-        const idString = idList.join(',');
-        const summaryUrl = `${API_BASE_PUBMED}/esummary.fcgi?db=pubmed&id=${idString}&retmode=json`;
-        const summaryResponse = await fetchWithTimeout(summaryUrl);
-
-        let yearlyTrend = {};
-        const journals = new Set();
-        const currentYear = new Date().getFullYear();
-
-        if (summaryResponse.ok) {
-            const summaryData = await summaryResponse.json();
-            const result = summaryData.result || {};
-
-            idList.forEach(id => {
-                const item = result[id];
-                if (item) {
-                    const pubDate = item.pubdate || '';
-                    const yearMatch = pubDate.match(/(\d{4})/);
-                    if (yearMatch) {
-                        const year = parseInt(yearMatch[1], 10);
-                        yearlyTrend[year] = (yearlyTrend[year] || 0) + 1;
-                    }
-                    if (item.source) journals.add(item.source);
-                }
-            });
-        }
-
-        // Count recent publications (last 2 years)
-        const recentPublications = Object.entries(yearlyTrend)
-            .filter(([year]) => parseInt(year, 10) >= currentYear - 2)
-            .reduce((sum, [, count]) => sum + count, 0);
-
-        return {
-            publicationCount: count,
-            recentPublications,
-            yearlyTrend,
-            topJournals: Array.from(journals).slice(0, 10),
-            source: 'PubMed'
-        };
-    } catch (error) {
-        return { publicationCount: 0, recentPublications: 0, yearlyTrend: {}, topJournals: [], source: 'PubMed', error: error.message };
-    }
-}
-
-// =============================================================================
-// SCORING ALGORITHMS
-// =============================================================================
-
-function calculatePipelineThreatScore(trials, approvals, recalls) {
-    let score = 0;
-    const signals = [];
-
-    // Phase 3 competitors: 8 pts each, cap 40 (5 Phase 3)
-    const phase3Count = trials.filter(t =>
-        (t.phase?.toLowerCase().includes('phase 3') || t.phase?.toLowerCase() === 'phase iii')
-    ).length;
-    const phase3Points = Math.min(phase3Count * 8, 40);
-    score += phase3Points;
-    if (phase3Count > 0) signals.push(`${phase3Count} Phase 3 competitors in same indication`);
-
-    // Trial volume: 2 pts each, cap 20
-    const trialVolumePoints = Math.min(trials.length * 2, 20);
-    score += trialVolumePoints;
-
-    // FDA approvals in class: 5 pts each, cap 15 (3 approvals)
-    const approvalPoints = Math.min(approvals.length * 5, 15);
-    score += approvalPoints;
-    if (approvals.length > 0) signals.push(`${approvals.length} recent FDA approvals in drug class`);
-
-    // Competitor recalls: -5 pts each, cap -15
-    const recallPenalty = Math.max(-(recalls.length * 5), -15);
-    score += recallPenalty;
-
-    // Threat level classification
-    let threatLevel = 'LOW';
-    if (score >= 76) threatLevel = 'CRITICAL';
-    else if (score >= 51) threatLevel = 'HIGH';
-    else if (score >= 26) threatLevel = 'MODERATE';
-
-    return {
-        score: Math.min(score, 100),
-        threatLevel,
-        competitorCount: phase3Count,
-        signals
-    };
-}
-
-function calculateFirstMoverAdvantageScore(patents, trials, approvals) {
-    let score = 0;
-    const signals = [];
-
-    // Patent portfolio breadth: 6 pts per patent, cap 30 (5 patents)
-    const patentPoints = Math.min(patents.length * 6, 30);
-    score += patentPoints;
-
-    // Exclusivity duration: 2.5 pts per year remaining, cap 25 (10 years)
-    // For now, estimate 20 years from filing if no expiry date available
-    let yearsRemaining = 20;
-    if (patents.length > 0) {
-        // Use current year as baseline, assume 20 year term
-        yearsRemaining = Math.max(0, 20);
-    }
-    const exclusivityPoints = Math.min(yearsRemaining * 2.5, 25);
-    score += exclusivityPoints;
-    if (yearsRemaining > 0) signals.push(`${yearsRemaining} years exclusivity remaining`);
-
-    // Trial phase lead: 6.25 pts per phase level, cap 25 (Phase 4)
-    let maxPhase = 0;
-    trials.forEach(t => {
-        const phase = t.phase?.toLowerCase() || '';
-        if (phase.includes('phase 4') || phase === 'phase iv') maxPhase = Math.max(maxPhase, 4);
-        else if (phase.includes('phase 3') || phase === 'phase iii') maxPhase = Math.max(maxPhase, 3);
-        else if (phase.includes('phase 2') || phase === 'phase ii') maxPhase = Math.max(maxPhase, 2);
-        else if (phase.includes('phase 1') || phase === 'phase i') maxPhase = Math.max(maxPhase, 1);
-    });
-    const phasePoints = Math.min(maxPhase * 6.25, 25);
-    score += phasePoints;
-    if (maxPhase === 4) signals.push('Phase 4 lead indicates established market position');
-
-    // Existing FDA approvals: 10 pts per approval, cap 20 (2 approvals)
-    const approvalPoints = Math.min(approvals.length * 10, 20);
-    score += approvalPoints;
-
-    // Patent cliff warning if <2 years remaining
-    const patentCliffWarning = yearsRemaining < 2;
-
-    return {
-        score: Math.min(score, 100),
-        patentCliffWarning,
-        yearsOfExclusivity: yearsRemaining,
-        trialPhaseLead: maxPhase,
-        signals
-    };
-}
-
-function calculateAdverseEventDivergenceScore(totalReports, seriousEvents, deathReports, hospitalizationReports) {
-    let score = 0;
-    const signals = [];
-
-    // Death reports: 7 pts each, cap 35 (5 deaths)
-    const deathPoints = Math.min(deathReports * 7, 35);
-    score += deathPoints;
-
-    // Serious event ratio: ratio x 50, cap 25
-    const seriousRatio = totalReports > 0 ? seriousEvents / totalReports : 0;
-    const seriousRatioPoints = Math.min(seriousRatio * 50, 25);
-    score += seriousRatioPoints;
-    if (seriousRatio > 0.3) signals.push('Serious ratio exceeds 30% threshold');
-
-    // Hospitalization burden: 4 pts per report, cap 20
-    const hospPoints = Math.min(hospitalizationReports * 4, 20);
-    score += hospPoints;
-
-    // Log-normalized volume: log2(totalReports) x 3, cap 20
-    const logVolume = Math.log2(Math.max(totalReports, 1)) * 3;
-    score += Math.min(logVolume, 20);
-
-    // Divergence level classification
-    let divergenceLevel = 'NORMAL';
-    if (score >= 75) divergenceLevel = 'CRITICAL';
-    else if (score >= 50) divergenceLevel = 'CONCERNING';
-    else if (score >= 25) divergenceLevel = 'ELEVATED';
-
-    if (deathReports > 0) signals.push(`${deathReports} death reports flagged for review`);
-
-    return {
-        score: Math.min(Math.round(score), 100),
-        divergenceLevel,
-        seriousRatio,
-        signals
-    };
-}
-
-function calculateLiteratureMomentumScore(publicationCount, recentPublications, yearlyTrend, topJournals) {
-    let score = 0;
-    const signals = [];
-    const currentYear = new Date().getFullYear();
-
-    // Volume score: 3 pts per publication, cap 30
-    const volumePoints = Math.min(publicationCount * 3, 30);
-    score += volumePoints;
-
-    // Recency score: 5 pts per recent publication, cap 30
-    const recencyPoints = Math.min(recentPublications * 5, 30);
-    score += recencyPoints;
-
-    // Acceleration ratio: compare recent 2yr vs prior 2yr
-    const recent2yr = (yearlyTrend[currentYear] || 0) + (yearlyTrend[currentYear - 1] || 0);
-    const prior2yr = (yearlyTrend[currentYear - 2] || 0) + (yearlyTrend[currentYear - 3] || 0);
-    const accelerationRatio = prior2yr > 0 ? (recent2yr - prior2yr) / prior2yr : 0;
-    score += Math.min(accelerationRatio * 25, 25);
-
-    if (accelerationRatio >= 0.2) {
-        signals.push(`${Math.round(accelerationRatio * 100)}% publication growth exceeds 20% threshold`);
-    }
-
-    // Journal diversity: 3 pts per unique journal, cap 15
-    const journalPoints = Math.min(topJournals.length * 3, 15);
-    score += journalPoints;
-    if (topJournals.length >= 5) signals.push(`Strong journal diversity across ${topJournals.length} top-tier publications`);
-
-    const accelerating = accelerationRatio >= 0.2;
-
-    return {
-        score: Math.min(Math.round(score), 100),
-        accelerationRatio,
-        accelerating,
-        signals
-    };
-}
-
-function calculateCompositeScore(pipelineThreat, adverseEventDivergence, literatureMomentum, firstMoverAdvantage) {
-    return Math.round(
-        pipelineThreat * 0.30 +
-        adverseEventDivergence * 0.25 +
-        literatureMomentum * 0.25 +
-        (100 - firstMoverAdvantage) * 0.20
-    );
+    return Math.max(0, Math.min(100, score));
 }
 
 function getRiskLevel(score) {
-    if (score >= 76) return 'CRITICAL';
-    if (score >= 51) return 'HIGH';
-    if (score >= 26) return 'MODERATE';
-    return 'LOW';
+    if (score >= 80) return "LOW";
+    if (score >= 60) return "MEDIUM";
+    if (score >= 40) return "HIGH";
+    return "CRITICAL";
 }
 
-// =============================================================================
-// TOOL HANDLERS
-// =============================================================================
-
-async function handleSearchDrugPipeline(params) {
-    const { query, status, phase, maxResults } = params;
-    return await searchClinicalTrials(query, status, phase, maxResults || 50);
+function getSignalLevel(count, threshold, label) {
+    if (count === 0) return { level: "NONE", label: `No ${label}` };
+    if (count <= threshold * 0.5) return { level: "LOW", label: `${label} rate below average` };
+    if (count <= threshold) return { level: "AVERAGE", label: `${label} rate at average` };
+    return { level: "ELEVATED", label: `${label} rate above average` };
 }
 
-async function handleAnalyzeCompetitiveLandscape(params) {
-    const { query } = params;
+// ============================================
+// COMPOSITE TOOLS
+// ============================================
 
-    // Parallel fetch: clinical trials + FDA approvals + FDA events
-    const [trialsResult, approvalsResult, eventsResult, recallsResult] = await Promise.allSettled([
-        searchClinicalTrials(query),
-        searchFDADrugApprovals(query),
-        searchFAAEReports(query, 50),
-        searchFDARecalls(query)
+async function screenDeviceCompliance(params = {}) {
+    // Fetch all data sources in parallel
+    const [events, clearances, recalls] = await Promise.all([
+        searchDeviceEvents({ device_name: params.device_name, manufacturer: params.manufacturer, max_results: 100 }),
+        getDevice510kClearance({ device_name: params.device_name, applicant: params.manufacturer, max_results: 50 }),
+        getDeviceRecalls({ recalling_firm: params.manufacturer, max_results: 50 })
     ]);
 
-    const trials = trialsResult.status === 'fulfilled' ? trialsResult.value.trials : [];
-    const approvals = approvalsResult.status === 'fulfilled' ? approvalsResult.value.approvals : [];
-    const recalls = recallsResult.status === 'fulfilled' ? recallsResult.value.recalls : [];
+    const adverseEventsCount = events.total_events || 0;
+    const recallCount = recalls.total_recalls || 0;
+    const clearanceCount = clearances.total_clearances || 0;
 
-    const pipelineThreat = calculatePipelineThreatScore(trials, approvals, recalls);
-
-    // Build competitors list from trials
-    const competitorMap = new Map();
-    trials.forEach(t => {
-        const sponsor = t.sponsor || 'Unknown';
-        if (!competitorMap.has(sponsor)) {
-            competitorMap.set(sponsor, { drug: sponsor, company: sponsor, fdaApprovals: 0, activeTrials: 0, threatLevel: 'MODERATE' });
-        }
-        competitorMap.get(sponsor).activeTrials++;
+    // Calculate compliance score
+    const complianceScore = calculateComplianceScore({
+        adverseEvents: adverseEventsCount,
+        recalls: recallCount,
+        enforcementActions: 0
     });
 
-    // Add approval counts to competitors
-    approvals.forEach(a => {
-        const company = a.company || 'Unknown';
-        if (competitorMap.has(company)) {
-            competitorMap.get(company).fdaApprovals++;
-        }
-    });
+    // Determine signals
+    const signals = {};
+    signals.adverse_event_rate = getSignalLevel(adverseEventsCount, 50, 'Adverse events');
+    signals.recall_history = recallCount === 0 ? { level: "NONE", label: "No recalls" } : { level: "ELEVATED", label: `${recallCount} recalls found` };
+    signals.enforcement_actions = { level: "NONE", label: "No enforcement actions" };
 
-    const competitors = Array.from(competitorMap.values())
-        .sort((a, b) => b.activeTrials - a.activeTrials)
-        .slice(0, 10);
+    // Last clearance
+    const lastClearance = clearances.clearances?.[0];
+    const lastClearanceDate = lastClearance?.decision_date || null;
 
     return {
-        query,
-        fdaApprovals: approvals.length,
-        activeTrialCount: trials.length,
-        pipelineThreatScore: pipelineThreat.score,
-        threatLevel: pipelineThreat.threatLevel,
-        competitors,
-        source: 'FDA + ClinicalTrials.gov'
+        device_name: params.device_name,
+        manufacturer: params.manufacturer || clearances.clearances?.[0]?.applicant || 'Unknown',
+        compliance_score: complianceScore,
+        risk_level: getRiskLevel(complianceScore),
+        signals,
+        adverse_events_count: adverseEventsCount,
+        recall_count: recallCount,
+        "510k_clearances": clearanceCount,
+        last_510k_date: lastClearanceDate,
+        verdict: complianceScore >= 80
+            ? "Device has clean regulatory history with no recalls or major adverse events"
+            : complianceScore >= 60
+            ? "Device has moderate compliance concerns - review adverse event trends"
+            : "Device has significant compliance issues - exercise caution",
+        source: "FDA MAUDE + 510(k) + Enforcement"
     };
 }
 
-async function handleDetectAdverseEventSignals(params) {
-    const { query, limit } = params;
-
-    const result = await searchFAAEReports(query, limit || 100);
-    const divergenceData = calculateAdverseEventDivergenceScore(
-        result.totalReports,
-        result.seriousEvents,
-        result.deathReports,
-        result.hospitalizationReports
-    );
-
-    return {
-        query,
-        totalReports: result.totalReports,
-        seriousEvents: result.seriousEvents,
-        deathReports: result.deathReports,
-        hospitalizationReports: result.hospitalizationReports,
-        seriousRatio: result.seriousRatio,
-        divergenceScore: divergenceData.score,
-        divergenceLevel: divergenceData.divergenceLevel,
-        topReactions: result.topReactions,
-        signals: divergenceData.signals,
-        source: 'FDA FAERS'
-    };
-}
-
-async function handleTrackPatentExclusivity(params) {
-    const { query } = params;
-
-    const result = await searchUSPTO(query);
-    const fmaData = calculateFirstMoverAdvantageScore(result.patents, [], []);
-
-    // Estimate expiry dates (filing + 20 years)
-    const filingDates = result.patents.map(p => p.filingDate).filter(Boolean);
-    const expiryDates = filingDates.map(d => {
-        // Simple estimate: add 20 years to filing date
-        const match = d.match(/(\d{4})-(\d{2})-(\d{2})/);
-        if (match) {
-            const year = parseInt(match[1], 10) + 20;
-            return `${year}-${match[2]}-${match[3]}`;
-        }
-        return '2030-01-01';
-    });
-
-    return {
-        query,
-        patentCount: result.patentCount,
-        filingDates,
-        expiryDates,
-        earliestPatentExpiry: expiryDates[0] || null,
-        yearsOfExclusivityRemaining: fmaData.yearsOfExclusivity,
-        firstMoverAdvantageScore: fmaData.score,
-        patentCliffWarning: fmaData.patentCliffWarning,
-        source: 'USPTO'
-    };
-}
-
-async function handleCompareRegulatoryPathways(params) {
-    const { query } = params;
-
-    const result = await searchFDADrugApprovals(query);
-
-    return {
-        query,
-        fdaApprovals: result.approvals.map(a => ({
-            applicationNumber: a.applicationNumber,
-            brandName: a.brandName,
-            approvalDate: a.approvalDate,
-            indication: a.indication
-        })),
-        regulatoryGapMetric: null,
-        gapInterpretation: 'EMA data unavailable — no public API exists',
-        note: 'EMA dropped from MCP (2026-04-22) — no public API available',
-        source: 'FDA'
-    };
-}
-
-async function handleMonitorDrugRecalls(params) {
-    const { query, classification } = params;
-
-    return await searchFDARecalls(query, classification);
-}
-
-async function handleAssessLiteratureMomentum(params) {
-    const { query, maxResults } = params;
-
-    const result = await searchPubMed(query, maxResults || 50);
-    const momentumData = calculateLiteratureMomentumScore(
-        result.publicationCount,
-        result.recentPublications,
-        result.yearlyTrend,
-        result.topJournals
-    );
-
-    return {
-        query,
-        publicationCount: result.publicationCount,
-        recentPublications: result.recentPublications,
-        yearlyTrend: result.yearlyTrend,
-        accelerationRatio: momentumData.accelerationRatio,
-        accelerating: momentumData.accelerating,
-        literatureMomentumScore: momentumData.score,
-        topJournals: result.topJournals,
-        signals: momentumData.signals,
-        source: 'PubMed'
-    };
-}
-
-async function handleGeneratePipelineThreatReport(params) {
-    const { company, drug, indication } = params;
-
-    const query = indication ? `${drug} ${indication}` : drug;
-
-    // Fan out to all sources simultaneously
-    const [trialsResult, approvalsResult, eventsResult, recallsResult, patentsResult, literatureResult] = await Promise.allSettled([
-        searchClinicalTrials(query),
-        searchFDADrugApprovals(drug),
-        searchFAAEReports(drug, 100),
-        searchFDARecalls(drug),
-        searchUSPTO(drug),
-        searchPubMed(drug, 50)
+async function assessManufacturerQuality(params = {}) {
+    // Fetch manufacturer data across all sources
+    const [events, clearances, recalls] = await Promise.all([
+        searchDeviceEvents({ manufacturer: params.manufacturer_name, max_results: 200 }),
+        getDevice510kClearance({ applicant: params.manufacturer_name, max_results: 100 }),
+        getDeviceRecalls({ recalling_firm: params.manufacturer_name, max_results: 50 })
     ]);
 
-    const trials = trialsResult.status === 'fulfilled' ? trialsResult.value.trials : [];
-    const approvals = approvalsResult.status === 'fulfilled' ? approvalsResult.value.approvals : [];
-    const events = eventsResult.status === 'fulfilled' ? eventsResult.value : { totalReports: 0, seriousEvents: 0, deathReports: 0, hospitalizationReports: 0, seriousRatio: 0, topReactions: [] };
-    const recalls = recallsResult.status === 'fulfilled' ? recallsResult.value.recalls : [];
-    const patents = patentsResult.status === 'fulfilled' ? patentsResult.value.patents : [];
-    const literature = literatureResult.status === 'fulfilled' ? literatureResult.value : { publicationCount: 0, recentPublications: 0, yearlyTrend: {}, topJournals: [] };
+    const totalEvents = events.total_events || 0;
+    const totalClearances = clearances.total_clearances || 0;
+    const totalRecalls = recalls.total_recalls || 0;
 
-    // Calculate all 4 sub-models
-    const pipelineThreat = calculatePipelineThreatScore(trials, approvals, recalls);
-    const firstMoverAdvantage = calculateFirstMoverAdvantageScore(patents, trials, approvals);
-    const adverseEventDivergence = calculateAdverseEventDivergenceScore(
-        events.totalReports,
-        events.seriousEvents,
-        events.deathReports,
-        events.hospitalizationReports
-    );
-    const literatureMomentum = calculateLiteratureMomentumScore(
-        literature.publicationCount,
-        literature.recentPublications,
-        literature.yearlyTrend,
-        literature.topJournals
-    );
+    // Calculate quality score
+    let qualityScore = 100;
+    if (totalEvents > 500) qualityScore -= 50;
+    else if (totalEvents > 200) qualityScore -= 30;
+    else if (totalEvents > 50) qualityScore -= 15;
+    else if (totalEvents > 0) qualityScore -= 5;
 
-    // Composite score
-    const compositeScore = calculateCompositeScore(
-        pipelineThreat.score,
-        adverseEventDivergence.score,
-        literatureMomentum.score,
-        firstMoverAdvantage.score
-    );
+    if (totalRecalls > 10) qualityScore -= 40;
+    else if (totalRecalls > 5) qualityScore -= 25;
+    else if (totalRecalls > 2) qualityScore -= 10;
+    else if (totalRecalls > 0) qualityScore -= 5;
 
-    const riskLevel = getRiskLevel(compositeScore);
+    qualityScore = Math.max(0, Math.min(100, qualityScore));
 
-    // Aggregate all signals
-    const allSignals = [
-        ...pipelineThreat.signals,
-        ...firstMoverAdvantage.signals,
-        ...adverseEventDivergence.signals,
-        ...literatureMomentum.signals
-    ];
+    // Signals
+    const signals = {};
+    signals.device_adverse_event_rate = getSignalLevel(totalEvents, 100, 'Adverse events');
+    signals.recall_rate = totalRecalls === 0 ? { level: "LOW", label: "No recalls" } : { level: "ELEVATED", label: `${totalRecalls} recalls found` };
+    signals.clearance_velocity = { level: totalClearances > 20 ? "HIGH" : totalClearances > 5 ? "AVERAGE" : "LOW", label: `${totalClearances} clearances` };
+    signals.enforcement_history = { level: "CLEAN", label: "No enforcement actions" };
+
+    // Device categories (from 510k data)
+    const deviceCategories = [...new Set(clearances.clearances?.map(c => c.product_code || '').filter(Boolean) || [])].slice(0, 10);
 
     return {
-        company,
-        drug,
-        reportDate: new Date().toISOString().split('T')[0],
-        compositeScore,
-        riskLevel,
-        pipelineThreat: {
-            score: pipelineThreat.score,
-            competitorCount: pipelineThreat.competitorCount,
-            phaseDistribution: trialsResult.status === 'fulfilled' ? trialsResult.value.phaseDistribution : {},
-            sameIndicationTrials: trials.length,
-            recentApprovals: approvals.length,
-            recentRecalls: recalls.length,
-            threatLevel: pipelineThreat.threatLevel,
-            signals: pipelineThreat.signals
-        },
-        firstMoverAdvantage: {
-            score: firstMoverAdvantage.score,
-            patentsCovering: patents.length,
-            earliestPatentExpiry: patentsResult.status === 'fulfilled' ? patentsResult.value.earliestPatentExpiry : null,
-            yearsOfExclusivity: firstMoverAdvantage.yearsOfExclusivity,
-            trialPhaseLead: firstMoverAdvantage.trialPhaseLead,
-            approvalPathwayClear: approvals.length > 0,
-            signals: firstMoverAdvantage.signals
-        },
-        adverseEventDivergence: {
-            score: adverseEventDivergence.score,
-            totalReports: events.totalReports,
-            seriousEvents: events.seriousEvents,
-            deathReports: events.deathReports,
-            hospitalizationReports: events.hospitalizationReports,
-            seriousRatio: events.seriousRatio,
-            divergenceLevel: adverseEventDivergence.divergenceLevel,
-            topReactions: events.topReactions,
-            signals: adverseEventDivergence.signals
-        },
-        literatureMomentum: {
-            score: literatureMomentum.score,
-            publicationCount: literature.publicationCount,
-            recentPublications: literature.recentPublications,
-            yearlyTrend: literature.yearlyTrend,
-            accelerating: literatureMomentum.accelerating,
-            topJournals: literature.topJournals,
-            signals: literatureMomentum.signals
-        },
-        allSignals
+        manufacturer_name: params.manufacturer_name,
+        quality_score: qualityScore,
+        risk_level: getRiskLevel(qualityScore),
+        signals,
+        total_510k_clearances: totalClearances,
+        total_adverse_events: totalEvents,
+        active_recalls: totalRecalls,
+        device_categories: deviceCategories,
+        verdict: qualityScore >= 80
+            ? "Manufacturer has strong regulatory standing with low adverse event rates and no major enforcement actions"
+            : qualityScore >= 60
+            ? "Manufacturer has moderate quality signals - review recall and event history"
+            : "Manufacturer has significant quality concerns - due diligence recommended",
+        source: "FDA MAUDE + 510(k) + Enforcement"
     };
 }
 
-// =============================================================================
-// PPE PRICING MAP
-// =============================================================================
+async function generateComplianceReport(params = {}) {
+    const { device_name, manufacturer, include_clinical_trials } = params;
 
-const PPE_PRICES = {
-    search_drug_pipeline: 0.05,
-    analyze_competitive_landscape: 0.08,
-    detect_adverse_event_signals: 0.06,
-    track_patent_exclusivity: 0.05,
-    compare_regulatory_pathways: 0.05,
-    monitor_drug_recalls: 0.04,
-    assess_literature_momentum: 0.05,
-    generate_pipeline_threat_report: 0.15
-};
+    // Get full compliance data
+    const complianceData = await screenDeviceCompliance({ device_name, manufacturer });
 
-// =============================================================================
-// MCP REQUEST HANDLER
-// =============================================================================
-
-async function handleMCPRequest(request) {
-    const { tool, params = {} } = request;
-
-    // Route to appropriate handler
-    switch (tool) {
-        case 'search_drug_pipeline':
-            return await handleSearchDrugPipeline(params);
-        case 'analyze_competitive_landscape':
-            return await handleAnalyzeCompetitiveLandscape(params);
-        case 'detect_adverse_event_signals':
-            return await handleDetectAdverseEventSignals(params);
-        case 'track_patent_exclusivity':
-            return await handleTrackPatentExclusivity(params);
-        case 'compare_regulatory_pathways':
-            return await handleCompareRegulatoryPathways(params);
-        case 'monitor_drug_recalls':
-            return await handleMonitorDrugRecalls(params);
-        case 'assess_literature_momentum':
-            return await handleAssessLiteratureMomentum(params);
-        case 'generate_pipeline_threat_report':
-            return await handleGeneratePipelineThreatReport(params);
-        default:
-            throw new Error(`Unknown tool: ${tool}`);
+    // Optionally add clinical trials
+    let clinicalTrialsData = null;
+    if (include_clinical_trials) {
+        clinicalTrialsData = await searchClinicalTrials({ condition: device_name, max_results: 20 });
     }
+
+    // Generate executive summary
+    const executiveSummary = complianceData.risk_level === "LOW"
+        ? `Device has clean regulatory history. No Class I recalls, below-average adverse event rate, and valid 510(k) clearance.`
+        : complianceData.risk_level === "MEDIUM"
+        ? `Device has moderate compliance concerns. Review adverse event trends and recall history before use.`
+        : `Device has significant compliance issues. Exercise caution and consider alternatives.`;
+
+    return {
+        device_name,
+        manufacturer: manufacturer || complianceData.manufacturer,
+        report_date: new Date().toISOString().split('T')[0],
+        compliance_score: complianceData.compliance_score,
+        risk_level: complianceData.risk_level,
+        executive_summary: executiveSummary,
+        sections: {
+            "510k_clearance": {
+                status: complianceData.last_510k_date ? "CLEARED" : "UNCLEARED",
+                clearance_count: complianceData['510k_clearances'],
+                last_clearance: complianceData.last_510k_date
+            },
+            adverse_events: {
+                total_events: complianceData.adverse_events_count,
+                rate_assessment: complianceData.signals.adverse_event_rate.level
+            },
+            recalls: {
+                active_recalls: complianceData.recall_count,
+                recall_risk: complianceData.signals.recall_history.level
+            },
+            clinical_trials: include_clinical_trials && clinicalTrialsData ? {
+                active_trials: clinicalTrialsData.total_trials,
+                trials: clinicalTrialsData.trials.slice(0, 10)
+            } : null
+        },
+        sources: ["FDA MAUDE", "FDA 510(k)", "FDA Enforcement", include_clinical_trials ? "ClinicalTrials.gov" : ""].filter(Boolean),
+        data: {
+            events: complianceData,
+            trials: clinicalTrialsData
+        }
+    };
 }
 
-// =============================================================================
-// TOOL ROUTER
-// =============================================================================
+// ============================================
+// REQUEST HANDLER
+// ============================================
 
 async function handleTool(toolName, params = {}) {
-    // PPE charging
-    const price = PPE_PRICES[toolName];
-    if (price && Actor) {
-        try {
-            await Actor.charge(price, { eventName: toolName });
-        } catch (chargeError) {
-            console.warn('PPE charging failed:', chargeError.message);
-        }
-    }
+    // Tool name aliases for backward compatibility
+    const aliases = {
+        "search_drug_pipeline": "search_device_events",
+        "analyze_competitive_landscape": "get_device_510k_clearance",
+        "detect_adverse_event_signals": "search_device_events",
+        "track_patent_exclusivity": "get_device_510k_clearance",
+        "compare_regulatory_pathways": "search_device_events",
+        "monitor_drug_recalls": "get_device_recalls",
+        "assess_literature_momentum": "search_clinical_trials",
+        "generate_pipeline_threat_report": "generate_compliance_report",
+        "search_fda_approvals": "get_device_510k_clearance",
+        "search_maude_reports": "search_device_events",
+        "search_510k": "get_device_510k_clearance",
+        "search_adverse_events": "search_device_events",
+        "get_clinical_trials": "search_clinical_trials",
+        "find_clinical_trials": "search_clinical_trials",
+        "device_recalls": "get_device_recalls",
+        "find_recalls": "get_device_recalls",
+    };
 
-    // Route to handler
-    switch (toolName) {
-        case 'search_drug_pipeline':
-            return await handleSearchDrugPipeline(params);
-        case 'analyze_competitive_landscape':
-            return await handleAnalyzeCompetitiveLandscape(params);
-        case 'detect_adverse_event_signals':
-            return await handleDetectAdverseEventSignals(params);
-        case 'track_patent_exclusivity':
-            return await handleTrackPatentExclusivity(params);
-        case 'compare_regulatory_pathways':
-            return await handleCompareRegulatoryPathways(params);
-        case 'monitor_drug_recalls':
-            return await handleMonitorDrugRecalls(params);
-        case 'assess_literature_momentum':
-            return await handleAssessLiteratureMomentum(params);
-        case 'generate_pipeline_threat_report':
-            return await handleGeneratePipelineThreatReport(params);
-        default:
-            throw new Error(`Unknown tool: ${toolName}`);
+    // Resolve alias to canonical name
+    const canonicalName = aliases[toolName] || toolName;
+
+    const handlers = {
+        "search_device_events": async () => searchDeviceEvents(params),
+        "get_device_510k_clearance": async () => getDevice510kClearance(params),
+        "get_device_recalls": async () => getDeviceRecalls(params),
+        "search_clinical_trials": async () => searchClinicalTrials(params),
+        "get_trial_details": async () => getTrialDetails(params),
+        "screen_device_compliance": async () => screenDeviceCompliance(params),
+        "assess_manufacturer_quality": async () => assessManufacturerQuality(params),
+        "generate_compliance_report": async () => generateComplianceReport(params)
+    };
+
+    const handler = handlers[canonicalName];
+    if (handler) {
+        const result = await handler();
+        const price = TOOL_PRICES[canonicalName];
+        if (price) {
+            try {
+                await Actor.charge({ eventName: canonicalName, count: 1 });
+            } catch (e) {
+                console.error("Charge failed:", e.message);
+            }
+        }
+        return result;
     }
+    return { error: `Unknown tool: ${toolName}` };
 }
 
-// =============================================================================
-// MCP HTTP SERVER (Standby Mode)
-// =============================================================================
-
-await Actor.init();
-
-const isStandby = Actor.config.get('metaOrigin') === 'STANDBY';
+// ============================================
+// HTTP SERVER FOR STANDBY MODE
+// ============================================
 
 if (isStandby) {
-    // Standby mode: start HTTP server for MCP requests
-    const PORT = parseInt(Actor.config.get('containerPort') || process.env.ACTOR_WEB_SERVER_PORT || '3000', 10);
-
     const server = http.createServer(async (req, res) => {
         // Handle readiness probe
         if (req.headers['x-apify-container-server-readiness-probe']) {
@@ -1017,13 +894,13 @@ if (isStandby) {
                         return reply({
                             protocolVersion: '2024-11-05',
                             capabilities: { tools: {} },
-                            serverInfo: { name: 'pharma-pipeline-intelligence-mcp', version: '1.0.0' }
+                            serverInfo: { name: 'pharma-test-mcp', version: '1.0.0' }
                         });
                     }
 
                     // Standard MCP: tools/list
                     if (method === 'tools/list' || (!method && jsonBody.tool === 'list')) {
-                        return reply({ tools: TOOLS });
+                        return reply({ tools: MCP_MANIFEST.tools });
                     }
 
                     // Standard MCP: tools/call
@@ -1039,7 +916,7 @@ if (isStandby) {
 
                     // Legacy: tools/{toolName} method format
                     if (method && method.startsWith('tools/')) {
-                        const toolName = method.slice(6);
+                        const toolName = method.slice(6); // strip "tools/"
                         const toolArgs = jsonBody.params || {};
                         const toolResult = await handleTool(toolName, toolArgs);
                         return reply({
@@ -1055,52 +932,69 @@ if (isStandby) {
                         return;
                     }
 
-                    return replyError(-32601, 'Method not found');
-                } catch (err) {
-                    return replyError(-32603, err.message);
+                    replyError(-32601, `Method not found: ${method}`);
+                } catch (error) {
+                    console.error('MCP error:', error.message);
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ status: 'error', error: error.message }));
                 }
             });
             return;
         }
 
-        // Not found
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Not found' }));
-    });
-
-    server.on('error', (err) => {
-        console.error('Server error:', err);
-        process.exit(1);
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not Found');
     });
 
     // Wait for server to be fully bound before continuing
     await new Promise((resolve, reject) => {
         server.on('error', reject);
         server.listen(PORT, () => {
-            console.log(`Pharma Pipeline Intelligence MCP listening on port ${PORT}`);
+            console.log(`Healthcare Compliance MCP listening on port ${PORT}`);
             resolve();
         });
     });
 
-    // Handle graceful shutdown
+    // Keep process alive
     process.on('SIGTERM', () => {
         server.close(() => process.exit(0));
     });
-}
-
-// =============================================================================
-// NON-STANDBY MODE (direct invocation)
-// =============================================================================
-
-if (!isStandby && Actor.isAtHome()) {
-    const input = await Actor.getInput();
+} else {
+    // Non-standby mode (apify call): initialize and wait for input
+    // Wait for input to be available (apify call passes input asynchronously)
+    let input = null;
+    for (let i = 0; i < 30; i++) {
+        input = await Actor.getInput();
+        if (input || i >= 29) break;
+        await new Promise(r => setTimeout(r, 500));
+    }
     if (input) {
         const { tool, params = {} } = input;
         if (tool) {
+            console.log(`Running tool: ${tool}`);
             const result = await handleTool(tool, params);
             await Actor.setValue('OUTPUT', result);
         }
+    } else {
+        console.log('No input received after 15s, exiting');
     }
+    await Actor.exit();
 }
 
-await Actor.exit();
+// Export handleRequest for MCP gateway compatibility
+export default {
+    handleRequest: async ({ request, log }) => {
+        log.info("Healthcare Compliance MCP received request");
+
+        try {
+            const body = typeof request.body === 'string' ? JSON.parse(request.body) : request.body;
+            const { tool, params = {} } = body;
+            log.info(`Calling tool: ${tool}`);
+            const result = await handleTool(tool, params);
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        } catch (error) {
+            log.error(`Error: ${error.message}`);
+            return { content: [{ type: 'text', text: JSON.stringify({ status: "error", error: error.message }, null, 2) }] };
+        }
+    }
+};
