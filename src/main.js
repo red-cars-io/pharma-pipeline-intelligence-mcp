@@ -839,7 +839,7 @@ async function handleTool(toolName, params = {}) {
         const price = TOOL_PRICES[canonicalName];
         if (price) {
             try {
-                await Actor.charge({ eventName: canonicalName, count: 1 });
+                await Actor.charge({ eventName: toolName, count: 1 });
             } catch (e) {
                 console.error("Charge failed:", e.message);
             }
