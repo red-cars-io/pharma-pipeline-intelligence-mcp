@@ -836,8 +836,14 @@ async function handleTool(toolName, params = {}) {
     const handler = handlers[canonicalName];
     if (handler) {
         const result = await handler();
-        const price = TOOL_PRICES[canonicalName];
-        if (price) {
+        // Charge using the ORIGINAL tool name (the user-facing MCP tool name).
+        // The platform's pricingInfo.pricingPerEvent.actorChargeEvents is keyed by
+        // the MCP tool name (e.g., 'search_drug_pipeline'), NOT the canonical
+        // alias (e.g., 'search_device_events'). Using canonicalName here was the
+        // root cause of $0 PPE revenue for this actor — charge calls were
+        // silently dropped because the event wasn't in pricingInfo.
+        // See: raw/sessions/2026-06/apify-audit-ppe-reality-2026-06-01.md
+        if (TOOL_PRICES[canonicalName]) {
             try {
                 await Actor.charge({ eventName: toolName, count: 1 });
             } catch (e) {
